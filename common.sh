@@ -45,6 +45,9 @@ ProcessDepot ()
 			.dll)
 				file_type="pe"
 				;;
+			.exe)
+				file_type="pe"
+				;;
 		esac
 
 		"$DUMP_STRINGS_PATH" -binary "$file" -target "$file_type" | sort --unique > "$(echo "$file" | sed -e "s/$1$/_strings.txt/g")"
