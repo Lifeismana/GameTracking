@@ -45,7 +45,8 @@ jobs:
           uses: actions/checkout@v6
           with:
             fetch-depth: 1
-            repository: 'SteamTracking/GameTracking'
+            repository: 'Lifeismana/GameTracking'
+            ref: 'parallel'
 
         - name: Download pre-built tools
           shell: bash

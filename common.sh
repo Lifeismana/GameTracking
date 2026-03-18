@@ -13,11 +13,11 @@ if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
 fi
 
 # Tool paths
-VRF_PATH="$ROOT_DIR/tools/exe/Source2Viewer/Source2Viewer-CLI${EXE_SUFFIX}"
-PROTOBUF_DUMPER_PATH="$ROOT_DIR/tools/exe/ProtobufDumper/ProtobufDumper${EXE_SUFFIX}"
-DUMP_STRINGS_PATH="$ROOT_DIR/tools/exe/DumpStrings${EXE_SUFFIX}"
-STEAM_FILE_DOWNLOADER_PATH="$ROOT_DIR/tools/exe/SteamFileDownloader/SteamFileDownloader${EXE_SUFFIX}"
-FIX_ENCODING_PATH="$ROOT_DIR/tools/exe/FixEncoding${EXE_SUFFIX}"
+export VRF_PATH="$ROOT_DIR/tools/exe/Source2Viewer/Source2Viewer-CLI${EXE_SUFFIX}"
+export PROTOBUF_DUMPER_PATH="$ROOT_DIR/tools/exe/ProtobufDumper/ProtobufDumper${EXE_SUFFIX}"
+export DUMP_STRINGS_PATH="$ROOT_DIR/tools/exe/DumpStrings${EXE_SUFFIX}"
+export STEAM_FILE_DOWNLOADER_PATH="$ROOT_DIR/tools/exe/SteamFileDownloader/SteamFileDownloader${EXE_SUFFIX}"
+export FIX_ENCODING_PATH="$ROOT_DIR/tools/exe/FixEncoding${EXE_SUFFIX}"
 
 # Allow disabling git operations by passing "no-git" as the first or second argument
 DO_GIT=1
@@ -38,7 +38,8 @@ ProcessDepot ()
 	mkdir -p "Protobufs"
 
 	# Map the file extension to the binary format type for the strings dumper
-	local file_type=""
+	local -x file_type=""
+	local -x ext="$1"
 	case "$1" in
 		.dylib)
 			file_type="macho"
@@ -55,13 +56,15 @@ ProcessDepot ()
 			return
 	esac
 
-	# Find all files matching the given extension and process each one
-	while IFS= read -r -d '' file
-	do
+	# Find all files matching the given extension and process each one in parallel
+	local cores
+	cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 0)
+	echo "Using $cores cores"
+	find . -type f -name "*$1" -print0 | xargs -0 -n 1 -P "$cores" bash -c '
+		file="$0"
 		# Skip common not game-specific binaries
-		if [[ "$(basename "$file" "$1")" = "steamclient" ]] || [[ "$(basename "$file" "$1")" = "libcef" ]]
-		then
-			continue
+		if [[ "$(basename "$file" "$ext")" = "steamclient" ]] || [[ "$(basename "$file" "$ext")" = "libcef" ]]; then
+			exit 0
 		fi
 
 		echo " $file"
@@ -70,15 +73,15 @@ ProcessDepot ()
 		"$PROTOBUF_DUMPER_PATH" "$file" "Protobufs/" > /dev/null
 
 		# Derive the output strings filename by replacing the extension with _strings.txt
-		if [[ "$1" == ".exe" ]]; then
+		if [[ "$ext" == ".exe" ]]; then
 			strings_file="${file}_strings.txt"
 		else
-			strings_file="$(echo "$file" | sed -e "s/$(echo "$1" | sed 's/\./\\./g')$/_strings.txt/g")"
+			strings_file="$(echo "$file" | sed -e "s/$(echo "$ext" | sed '\''s/\./\\./g'\'')$/_strings.txt/g")"
 		fi
 
 		# Extract readable strings from the binary, sort and deduplicate them
 		"$DUMP_STRINGS_PATH" -binary "$file" -target "$file_type" | sort --unique > "$strings_file"
-	done <   <(find . -type f -name "*$1" -print0)
+	'
 
 	echo "::endgroup::"
 }
