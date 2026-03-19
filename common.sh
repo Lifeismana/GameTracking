@@ -13,11 +13,11 @@ if [[ "$(uname -s)" == MINGW* ]] || [[ "$(uname -s)" == MSYS* ]]; then
 fi
 
 # Tool paths
-export VRF_PATH="$ROOT_DIR/tools/exe/Source2Viewer/Source2Viewer-CLI${EXE_SUFFIX}"
-export PROTOBUF_DUMPER_PATH="$ROOT_DIR/tools/exe/ProtobufDumper/ProtobufDumper${EXE_SUFFIX}"
-export DUMP_STRINGS_PATH="$ROOT_DIR/tools/exe/DumpStrings${EXE_SUFFIX}"
-export STEAM_FILE_DOWNLOADER_PATH="$ROOT_DIR/tools/exe/SteamFileDownloader/SteamFileDownloader${EXE_SUFFIX}"
-export FIX_ENCODING_PATH="$ROOT_DIR/tools/exe/FixEncoding${EXE_SUFFIX}"
+VRF_PATH="$ROOT_DIR/tools/exe/Source2Viewer/Source2Viewer-CLI${EXE_SUFFIX}"
+PROTOBUF_DUMPER_PATH="$ROOT_DIR/tools/exe/ProtobufDumper/ProtobufDumper${EXE_SUFFIX}"
+DUMP_STRINGS_PATH="$ROOT_DIR/tools/exe/DumpStrings${EXE_SUFFIX}"
+STEAM_FILE_DOWNLOADER_PATH="$ROOT_DIR/tools/exe/SteamFileDownloader/SteamFileDownloader${EXE_SUFFIX}"
+FIX_ENCODING_PATH="$ROOT_DIR/tools/exe/FixEncoding${EXE_SUFFIX}"
 
 # Allow disabling git operations by passing "no-git" as the first or second argument
 DO_GIT=1
@@ -28,64 +28,66 @@ if [[ $# -gt 0 ]]; then
 	fi
 fi
 
-# ProcessDepot - Processes binary files of a given type by dumping protobufs and extracting strings.
-# @param $1 - File extension to process (e.g. .dll, .so, .dylib, .exe)
-ProcessDepot ()
+# _ProcessBinary - Processes a single binary file by dumping protobufs and extracting strings.
+# @param $1 - File path to process
+# @param $2 - File extension (e.g. .dll, .so, .dylib, .exe)
+_ProcessBinary ()
 {
-	echo "::group::Processing binaries ($1)"
+    local file="$1"
+    local ext="$2"
 
-#	rm -r "Protobufs"
-	mkdir -p "Protobufs"
+    # Skip common not game-specific binaries
+    if [[ "$(basename "$file" "$ext")" = "steamclient" ]] || [[ "$(basename "$file" "$ext")" = "libcef" ]]
+    then
+        return
+    fi
 
-	# Map the file extension to the binary format type for the strings dumper
-	local -x file_type=""
-	local -x ext="$1"
-	case "$1" in
-		.dylib)
-			file_type="macho"
-			;;
-		.so)
-			file_type="elf"
-			;;
-		.dll|.exe)
-			file_type="pe"
-			;;
-		*)
-			echo "Unknown file type $1"
-			echo "::endgroup::"
-			return
-	esac
+    echo " $file"
 
-	# Find all files matching the given extension and process each one in parallel
-	local cores
-	cores=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 0)
-	echo "Using $cores cores"
-	find . -type f -name "*$1" -print0 | xargs -0 -n 1 -P "$cores" bash -c '
-		file="$0"
-		# Skip common not game-specific binaries
-		if [[ "$(basename "$file" "$ext")" = "steamclient" ]] || [[ "$(basename "$file" "$ext")" = "libcef" ]]; then
-			exit 0
-		fi
+    # Extract protobuf definitions from the binary
+    "$PROTOBUF_DUMPER_PATH" "$file" "Protobufs/" > /dev/null
 
-		echo " $file"
+    # Derive the output strings filename by replacing the extension with _strings.txt
+    if [[ "$ext" == ".exe" ]]; then
+        local strings_file="${file}_strings.txt"
+    else
+        local strings_file="$(echo "$file" | sed -e "s/$(echo "$ext" | sed 's/\./\\./g')$/_strings.txt/g")"
+    fi
 
-		# Extract protobuf definitions from the binary
-		"$PROTOBUF_DUMPER_PATH" "$file" "Protobufs/" > /dev/null
-
-		# Derive the output strings filename by replacing the extension with _strings.txt
-		if [[ "$ext" == ".exe" ]]; then
-			strings_file="${file}_strings.txt"
-		else
-			strings_file="$(echo "$file" | sed -e "s/$(echo "$ext" | sed '\''s/\./\\./g'\'')$/_strings.txt/g")"
-		fi
-
-		# Extract readable strings from the binary, sort and deduplicate them
-		"$DUMP_STRINGS_PATH" -binary "$file" -target "$file_type" | sort --unique > "$strings_file"
-	'
-
-	echo "::endgroup::"
+    # Extract readable strings from the binary, sort and deduplicate them
+    "$DUMP_STRINGS_PATH" -binary "$file" | sort --unique > "$strings_file"
 }
 
+# ProcessDepot - Processes binary files by dumping protobufs and extracting strings.
+# @param $@ - File extensions to process (e.g. .dll .so .dylib .exe)
+ProcessDepot ()
+{
+    echo "::group::Processing binaries ($*)"
+
+#    rm -r "Protobufs"
+    mkdir -p "Protobufs"
+
+    local max_jobs=10
+    local job_count=0
+
+    for ext in "$@"; do
+        # Find all files matching the given extension and process each one
+        while IFS= read -r -d '' file
+        do
+            _ProcessBinary "$file" "$ext" &
+
+            ((job_count++))
+            if ((job_count >= max_jobs)); then
+                wait -n
+                ((job_count--))
+            fi
+        done <   <(find . -type f -name "*$ext" -print0)
+    done
+
+    wait
+
+    echo "::endgroup::"
+}
 # ProcessVPK - Lists contents of VPK directory files and writes them to corresponding .txt files.
 ProcessVPK ()
 {
