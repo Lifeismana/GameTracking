@@ -4,6 +4,13 @@ on:
     push:
         branches: [master]
     workflow_dispatch:
+        inputs:
+          submodule_update:
+            description: 'Update submodules before building & push if successful'
+            required: false
+            type: boolean
+            default: false
+
 
 concurrency:
     group: build-tools
@@ -39,6 +46,10 @@ jobs:
           with:
             fetch-depth: 1
 
+        - name: Update submodules
+          if: ${{ inputs.submodule_update == 'true' }}
+          run: git submodule update --init --remote
+
         - name: Setup Go
           uses: actions/setup-go@v6
           with:
@@ -52,6 +63,15 @@ jobs:
         - name: Build tools
           shell: bash
           run: ./tools/build.sh
+
+        - name: Push Updated Submodules
+          if: ${{ inputs.submodule_update == 'true' }}
+          run: |
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git add .
+            git commit -m "Update submodules after tools build"
+            git push
 
         - name: Create archive
           shell: bash
